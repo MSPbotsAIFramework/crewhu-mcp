@@ -23,13 +23,16 @@ from ._common import (
     READ_ONLY,
     REPLACES_VALUES,
     ClientFactory,
+    Offset,
     RecordId,
     Since,
     Step,
     limit_field,
-    page_result,
+    refers_to,
     run_tool,
+    start_offset,
     updated_since,
+    window_result,
 )
 
 
@@ -40,11 +43,13 @@ class MetricValue(BaseModel):
 
 def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
     @mcp.tool(annotations=READ_ONLY)
-    async def crewhu_badges_list(limit: limit_field(50) = None, step: Step = None) -> str:
+    async def crewhu_badges_list(limit: limit_field(50) = None, step: Step = None, offset: Offset = None) -> str:
         """List the badges employees can award and earn (name and description)."""
 
         async def action(client: CrewhuClient) -> dict:
-            return page_result("badges", await client.list("badge", None, limit or 50, step or 1))
+            size = limit or 50
+            start = start_offset(offset, step, size)
+            return window_result("badges", await client.read_from("badge", None, start, size), start, size)
 
         return await run_tool("crewhu_badges_list", client_factory, action)
 
@@ -65,15 +70,26 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
         badge_id: Annotated[str | None, Field(description="Only awards of this badge id.")] = None,
         awarded_by: Annotated[str | None, Field(description="Only awards given by this user id.")] = None,
         since: Since = None,
+        offset: Offset = None,
     ) -> str:
-        """List badge awards (recognition feed): badge, giver, recipients, message, points, date, cancellation."""
+        """List badge awards (recognition feed): badge, giver, recipients, message, points, date, cancellation.
+
+        user_id, badge_id and awarded_by are matched here (Crewhu filters only by date), reading up
+        to 2,000 awards per call; continue with offset=next_offset. Add since to narrow the scan.
+        """
 
         async def action(client: CrewhuClient) -> dict:
-            query: dict[str, Any] = updated_since(since)
-            for field, value in (("toUsers", user_id), ("badge", badge_id), ("fromUser", awarded_by)):
-                if value and value.strip():
-                    query[field] = value.strip()
-            return page_result("awards", await client.list("badgehistory", query or None, limit or 20, step or 1))
+            pairs = (("toUsers", user_id), ("badge", badge_id), ("fromUser", awarded_by))
+            wanted = {k: v.strip() for k, v in pairs if v and v.strip()}
+
+            def keep(a: Any) -> bool:
+                return isinstance(a, dict) and all(refers_to(a.get(k), v) for k, v in wanted.items())
+
+            size = limit or 20
+            start = start_offset(offset, step, size)
+            query = updated_since(since) or None
+            window = await client.read_from("badgehistory", query, start, size, keep if wanted else None)
+            return window_result("awards", window, start, size, filtered=bool(wanted))
 
         return await run_tool("crewhu_badges_history_list", client_factory, action)
 
@@ -81,17 +97,28 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
     async def crewhu_badges_user_recognition(
         user_id: Annotated[str, Field(description="Recipient user id.", min_length=1)],
         limit: limit_field(20, "Awards to return") = None,
+        offset: Offset = None,
     ) -> str:
-        """Get the badges a user has received, with total points from awards that were not cancelled."""
+        """Get the badges a user has received, with total points from awards that were not cancelled.
+
+        Points count only the awards returned; continue with offset=next_offset for more.
+        """
 
         async def action(client: CrewhuClient) -> dict:
-            page = await client.list("badgehistory", {"toUsers": user_id.strip()}, limit or 20, 1)
-            active = [a for a in page.items if isinstance(a, dict) and not a.get("dateCancelled")]
+            wanted = user_id.strip()
+            size, start = limit or 20, offset or 0
+            window = await client.read_from(
+                "badgehistory", None, start, size, lambda a: isinstance(a, dict) and refers_to(a.get("toUsers"), wanted)
+            )
+            active = [a for a in window.items if not a.get("dateCancelled")]
             points = sum(a.get("badgePoints") or 0 for a in active if isinstance(a.get("badgePoints"), (int, float)))
-            return page_result(
+            return window_result(
                 "awards",
-                page,
-                user_id=user_id.strip(),
+                window,
+                start,
+                size,
+                filtered=True,
+                user_id=wanted,
                 active_awards=len(active),
                 active_points_in_page=points,
             )

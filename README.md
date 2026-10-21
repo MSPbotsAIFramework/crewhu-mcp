@@ -32,30 +32,33 @@ A request to `/mcp` without the header gets HTTP 401 naming it.
 
 ## Tools
 
-All tools return a JSON string. List tools take `limit` (max 100, Crewhu's limit) and `step`
-(page number from 1) and return the records plus `{count, total, step, has_more, next_step}`.
+All tools return a JSON string. List tools take `limit` (max 100, Crewhu's limit) and
+`offset` (record position from 0) or the older `step` (page number from 1), and return the
+records plus `{count, total, offset, has_more, next_offset}`; pass `next_offset` as `offset` for
+the next page (`step` / `next_step` are kept for step paging). Crewhu lists records oldest first,
+so use `since` for recent ones.
 Ids are Crewhu `_id` strings; dates are ISO 8601 UTC. Survey records get a computed
 `sentiment` (`positive` for rating 5, `neutral` for 0, `negative` for -5).
 
 | Tool | Purpose | Parameters (required in **bold**) |
 |---|---|---|
-| `crewhu_surveys_list` | List CSAT survey responses: customer, rating / sentiment, comment, ticket, credited employees | limit, step, sentiment (`positive`, `neutral`, `negative`), since, include_inactive |
+| `crewhu_surveys_list` | List CSAT survey responses: customer, rating / sentiment, comment, ticket, credited employees | limit, step, offset, sentiment (`positive`, `neutral`, `negative`), since, include_inactive |
 | `crewhu_surveys_get` | One survey, including tags, review flag and credited employee ids | **id** |
-| `crewhu_surveys_search` | Search surveys by comment, ticket summary / number or customer | **query**, limit |
+| `crewhu_surveys_search` | Search surveys by comment, ticket summary / number or customer, newest first | **query**, limit, since |
 | `crewhu_surveys_detractors` | Recent negative surveys (default last 30 days) for service recovery | limit, since |
 | `crewhu_surveys_promoters` | Recent positive surveys (default last 30 days) | limit, since |
-| `crewhu_users_list` | List employees: name, employee id, position, department, location | limit, step, department, include_inactive |
+| `crewhu_users_list` | List employees: name, employee id, position, department, location | limit, step, offset, department, include_inactive |
 | `crewhu_users_get` | One employee, including hire date and managed departments / locations | **id** |
 | `crewhu_users_search` | Find employees by name, employee id, department, position or location | **query**, limit |
-| `crewhu_badges_list` | List the badges that can be awarded | limit, step |
+| `crewhu_badges_list` | List the badges that can be awarded | limit, step, offset |
 | `crewhu_badges_get` | One badge | **id** |
-| `crewhu_badges_history_list` | Badge awards (recognition feed): giver, recipients, message, points, cancellation | limit, step, user_id, badge_id, awarded_by, since |
-| `crewhu_badges_user_recognition` | Badges one user received, with the points of awards not cancelled | **user_id**, limit |
+| `crewhu_badges_history_list` | Badge awards (recognition feed): giver, recipients, message, points, cancellation | limit, step, offset, user_id, badge_id, awarded_by, since |
+| `crewhu_badges_user_recognition` | Badges one user received, with the points of awards not cancelled | **user_id**, limit, offset |
 | `crewhu_badges_update_contest` | Post External Metric results to contest leaderboards (**write**) | metric_token, timeframe (`DY`, `WK`, `MO`, `QT`, `YR`), data (`[{identificator, value}]`) - all three needed at runtime; legacy id, name, description, target (accepted, not supported) |
-| `crewhu_prizes_list` | Prize catalog: description (the title), points cost, taxable flag, link | limit, step, available_only |
+| `crewhu_prizes_list` | Prize catalog: description (the title), points cost, taxable flag, link | limit, step, offset, available_only |
 | `crewhu_prizes_get` | One prize | **id** |
-| `crewhu_prizes_history_list` | Prize redemptions: prize, user, points, quantity, status, dates | limit, step, user_id, prize_id, status, since |
-| `crewhu_prizes_user_redemptions` | Prizes one user redeemed | **user_id**, limit |
+| `crewhu_prizes_history_list` | Prize redemptions: prize, user, points, quantity, status, dates | limit, step, offset, user_id, prize_id, status, since |
+| `crewhu_prizes_user_redemptions` | Prizes one user redeemed | **user_id**, limit, offset |
 | `crewhu_prizes_pending_redemptions` | Redemptions still waiting to be processed | limit |
 
 Errors come back as a JSON envelope instead of an exception:
@@ -126,15 +129,24 @@ uv run pytest
 - **Contract test.** `tests/contract_baseline.json` holds the deployed and upstream tool schemas;
   `tests/test_contract.py` checks every tool still exists, accepts every parameter of both and
   requires nothing the deployed version did not.
-- **Client-side filtering.** The Open API filters only by update date, active flag and record
-  fields, and has no text search. Sentiment, search and "pending" status are matched here:
-  detractors / promoters read up to 1,000 surveys in the window, pending redemptions up to
-  1,000 redemptions, and the search tools the first `limit` records. Results say how many
-  records were scanned and whether the scan was complete.
+- **Client-side filtering.** The Open API filters only by update date (`_updated_at`) and the
+  active flag (`inactive`); it ignores any other field in `query`, and has no text search or
+  sort. Department, user, badge, giver, prize, status, sentiment, search and "pending" status
+  are matched here. Filtered lists read up to 2,000 records per call (20 pages of 100) and
+  return `total_unfiltered` (Crewhu's count), `scanned`, `matched_total` when the whole
+  collection was read, or `scan_incomplete` with `next_offset` to continue. Detractors /
+  promoters read up to 1,000 surveys in the window, pending redemptions up to 1,000
+  redemptions. `crewhu_surveys_search` reads up to 2,000 of the most recent surveys, newest
+  first, and returns the `searched_range`; `crewhu_users_search` reads the first `limit` users.
+- **Paging.** Crewhu pages by `step` only, so pages of 100 are read and sliced to `offset` /
+  `limit`. When a result is cut to fit the size limit, `next_offset` points right after the
+  last record returned, so following it never skips records.
 - **JSON output.** Results are structured JSON (with a computed survey `sentiment`) instead of
   formatted text.
-- **Single records.** `*_get` tools read `/v1/{resource}/{id}` and fall back to an `_id`
-  filter on the collection.
+- **Single records.** The Open API has no item route and ignores an `_id` filter, so `*_get`
+  tools read the collection and return the record whose `_id` matches (`not_found` otherwise).
+  Survey ids encode their creation time, so `crewhu_surveys_get` only reads surveys updated
+  since then.
 
 ## License
 

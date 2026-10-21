@@ -19,7 +19,19 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 from ..api_client import CrewhuClient
-from ._common import READ_ONLY, ClientFactory, RecordId, Step, limit_field, matches, page_result, run_tool
+from ._common import (
+    READ_ONLY,
+    ClientFactory,
+    Offset,
+    RecordId,
+    Step,
+    limit_field,
+    matches,
+    run_tool,
+    same_text,
+    start_offset,
+    window_result,
+)
 
 _SEARCH_FIELDS = ("firstname", "lastname", "employee_id", "department", "position", "location")
 
@@ -34,16 +46,19 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
     async def crewhu_users_list(
         limit: limit_field(50) = None,
         step: Step = None,
-        department: Annotated[str | None, Field(description="Exact department name.")] = None,
+        department: Annotated[str | None, Field(description="Exact department name (case-insensitive).")] = None,
         include_inactive: Annotated[bool | None, Field(description="Include inactive users (default false).")] = None,
+        offset: Offset = None,
     ) -> str:
         """List employees with name, employee id, position, department and location."""
 
         async def action(client: CrewhuClient) -> dict:
             query: dict[str, Any] = {} if include_inactive else {"inactive": False}
-            if department and department.strip():
-                query["department"] = department.strip()
-            return page_result("users", await client.list("user", query, limit or 50, step or 1))
+            size, wanted = limit or 50, (department or "").strip()
+            start = start_offset(offset, step, size)
+            keep = (lambda u: isinstance(u, dict) and same_text(u.get("department"), wanted)) if wanted else None
+            window = await client.read_from("user", query, start, size, keep)
+            return window_result("users", window, start, size, filtered=bool(wanted))
 
         return await run_tool("crewhu_users_list", client_factory, action)
 

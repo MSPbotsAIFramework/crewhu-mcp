@@ -17,7 +17,8 @@ import asyncio
 import json
 import logging
 import time
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from http.cookiejar import CookieJar, DefaultCookiePolicy
 from typing import Any
 
@@ -33,6 +34,10 @@ _MAX_RETRIES = 2
 _MAX_BACKOFF_SECONDS = 20.0
 # Whole-call budget including retries; the gateway times a tool call out at 120s.
 _CALL_BUDGET_SECONDS = 100.0
+# Scans that read page after page stop starting new pages after this long, or after
+# SCAN_MAX_PAGES pages of 100, and say where to continue.
+_SCAN_BUDGET_SECONDS = 60.0
+SCAN_MAX_PAGES = 20
 
 # One connection pool for the process. It never holds credentials: the token
 # header is built per request from the caller's own token, so sharing the
@@ -113,6 +118,21 @@ class Page:
     has_more: bool
 
 
+@dataclass
+class Window:
+    """Records read from one position of a collection, optionally matched locally."""
+
+    items: list
+    total: int | None  # server total of the collection (Crewhu applies only _updated_at / inactive)
+    next_offset: int | None  # where to continue; None once the collection end was reached
+    positions: list[int] = field(default_factory=list)  # position right after each returned record
+    scanned: int = 0
+
+    @property
+    def complete(self) -> bool:
+        return self.next_offset is None
+
+
 class CrewhuClient:
     """Thin wrapper over the Crewhu Open API for one caller's token."""
 
@@ -151,22 +171,71 @@ class CrewhuClient:
             step += 1
         return Page(items[:max_records], total, 1, len(items), more or len(items) > max_records)
 
-    async def get(self, resource: str, record_id: str) -> Any:
-        """One record by _id: the item route first, else an _id filter on the collection."""
-        try:
-            record = await self.request("GET", f"{resource}/{record_id}")
-        except CrewhuError as e:
-            if e.status_code not in (400, 404):
-                raise
-            record = None
-        if isinstance(record, dict) and isinstance(record.get("results"), list):
-            record = record["results"][0] if record["results"] else None
-        if record:
-            return record
-        page = await self.list(resource, {"_id": record_id}, limit=1)
-        if not page.items:
-            raise CrewhuError(404, f"No {resource} with id {record_id}")
-        return page.items[0]
+    async def read_from(
+        self,
+        resource: str,
+        query: dict[str, Any] | None,
+        offset: int,
+        limit: int,
+        keep: Callable[[Any], bool] | None = None,
+        max_pages: int = SCAN_MAX_PAGES,
+    ) -> Window:
+        """Up to ``limit`` records from position ``offset`` (0-based) of the collection.
+
+        Crewhu pages by step only, so pages of 100 are read and sliced here. ``keep``
+        matches records locally (Crewhu ignores equality filters); then pages are read
+        until ``limit`` matches, ``max_pages`` pages or the time budget are reached.
+        """
+        offset = max(int(offset), 0)
+        step, skip = offset // MAX_PAGE_SIZE + 1, offset % MAX_PAGE_SIZE
+        items: list = []
+        positions: list[int] = []
+        total: int | None = None
+        position, scanned, pages = offset, 0, 0
+        started = time.monotonic()
+        while True:
+            page = await self.list(resource, query, MAX_PAGE_SIZE, step)
+            pages += 1
+            total = page.total
+            base = (step - 1) * MAX_PAGE_SIZE
+            for index in range(skip, len(page.items)):
+                record = page.items[index]
+                position, scanned = base + index + 1, scanned + 1
+                if keep is None or keep(record):
+                    items.append(record)
+                    positions.append(position)
+                    if len(items) >= limit:
+                        break
+            ended = not (page.has_more and page.items)
+            if len(items) >= limit:
+                rest_of_page = position < base + len(page.items)
+                return Window(items, total, position if rest_of_page or not ended else None, positions, scanned)
+            if ended:
+                return Window(items, total, None, positions, scanned)
+            position = base + len(page.items)
+            if pages >= max_pages or time.monotonic() - started > _SCAN_BUDGET_SECONDS:
+                return Window(items, total, position, positions, scanned)
+            step, skip = step + 1, 0
+
+    async def get(self, resource: str, record_id: str, query: dict[str, Any] | None = None) -> Any:
+        """One record by _id, found by scanning the collection (``query`` narrows the scan).
+
+        The Open API has no item route and ignores an _id filter, so the record whose
+        _id equals ``record_id`` is looked up page by page.
+        """
+        wanted = str(record_id).strip()
+        if not wanted:
+            raise ValueError("id must not be blank.")
+        window = await self.read_from(
+            resource, query, 0, 1, lambda r: isinstance(r, dict) and str(r.get("_id")) == wanted, max_pages=50
+        )
+        if window.items:
+            return window.items[0]
+        if window.complete:
+            raise CrewhuError(404, f"No {resource} with id {wanted}")
+        raise CrewhuError(
+            404, f"No {resource} with id {wanted} in the first {window.scanned} records searched ({window.total} in total)"
+        )
 
     async def post(self, path: str, body: Any) -> Any:
         return await self.request("POST", path, body=body)

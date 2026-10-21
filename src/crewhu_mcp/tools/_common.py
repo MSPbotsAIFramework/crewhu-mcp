@@ -14,6 +14,7 @@
 """Shared argument types, query / page helpers and the error-handling wrapper."""
 
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
@@ -23,7 +24,7 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from .._json import dump_json_capped, error_envelope
-from ..api_client import CrewhuClient, CrewhuError, Page
+from ..api_client import CrewhuClient, CrewhuError, Window
 
 logger = logging.getLogger("crewhu_mcp.tools")
 
@@ -39,6 +40,10 @@ NOT_CONFIGURED = error_envelope(
 
 RecordId = Annotated[str, Field(description="Crewhu record id (_id).", min_length=1)]
 Step = Annotated[int | None, Field(description="Page number, from 1 (default 1).", ge=1)]
+Offset = Annotated[
+    int | None,
+    Field(description="Record position to start from (0-based); pass next_offset from the previous result.", ge=0),
+]
 Since = Annotated[str | None, Field(description="ISO 8601 UTC timestamp, e.g. 2026-06-01T00:00:00Z.")]
 
 
@@ -70,19 +75,76 @@ def updated_since(since: str | None, field: str = "since") -> dict[str, Any]:
     return {"_updated_at": {"$gte": iso_utc(since, field)}} if since and since.strip() else {}
 
 
-def page_result(key: str, page: Page, items: list | None = None, **extra: Any) -> dict:
-    shown = page.items if items is None else items
-    return compact(
-        {
-            key: shown,
-            "count": len(shown),
-            "total": page.total,
-            "step": page.step,
-            "has_more": page.has_more,
-            "next_step": page.step + 1 if page.has_more else None,
-            **extra,
-        }
-    )
+def start_offset(offset: int | None, step: int | None, limit: int) -> int:
+    """``offset`` wins; otherwise page ``step`` of ``limit`` records."""
+    return offset if offset is not None else ((step or 1) - 1) * limit
+
+
+def window_result(
+    key: str,
+    window: Window,
+    offset: int,
+    limit: int,
+    step: int | None = None,
+    filtered: bool = False,
+    **extra: Any,
+) -> dict:
+    """List result read with ``CrewhuClient.read_from``.
+
+    ``next_offset`` continues right after the last record examined; when the result is
+    cut to fit the size limit it continues right after the last record returned.
+    ``next_step`` is kept for callers paging by step (unfiltered, step-aligned reads).
+    """
+    aligned = not filtered and offset % limit == 0 and window.next_offset in (None, offset + limit)
+    result: dict[str, Any] = {
+        key: window.items,
+        "count": len(window.items),
+        "offset": offset,
+        "has_more": window.next_offset is not None,
+        "next_offset": window.next_offset,
+    }
+    if filtered:
+        # Crewhu ignores equality filters, so they are matched here; its total is unfiltered.
+        result["total_unfiltered"] = window.total
+        result["scanned"] = window.scanned
+        if offset == 0 and window.complete:
+            result["matched_total"] = len(window.items)
+        elif window.next_offset is not None and len(window.items) < limit:
+            result["scan_incomplete"] = True
+            result["note"] = (
+                f"Searched {window.scanned} records and found {len(window.items)} matches; "
+                "call again with offset=next_offset to search further."
+            )
+    else:
+        result["total"] = window.total
+    if aligned:
+        result["step"] = offset // limit + 1
+        result["next_step"] = offset // limit + 2 if window.next_offset is not None else None
+    result.update(extra)
+    result["_resume"] = {"key": "next_offset", "positions": window.positions}
+    return compact(result)
+
+
+def refers_to(value: Any, wanted: str) -> bool:
+    """True if a reference field (an id, an object with _id, or a list of them) points to ``wanted``."""
+    if isinstance(value, list):
+        return any(refers_to(v, wanted) for v in value)
+    if isinstance(value, dict):
+        value = value.get("_id")
+    return value is not None and str(value) == wanted
+
+
+def same_text(value: Any, wanted: str) -> bool:
+    return value is not None and str(value).strip().lower() == wanted.strip().lower()
+
+
+def object_id_time(record_id: str) -> str | None:
+    """Creation time encoded in a 24-hex-digit Crewhu (MongoDB ObjectId) id, ISO UTC."""
+    text = record_id.strip()
+    if not re.fullmatch(r"[0-9a-fA-F]{24}", text):
+        return None
+    created = datetime.fromtimestamp(int(text[:8], 16), UTC) - timedelta(minutes=1)
+    return created.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
 def matches(record: dict, needle: str, fields: tuple[str, ...]) -> bool:
