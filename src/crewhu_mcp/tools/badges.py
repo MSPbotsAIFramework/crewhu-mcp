@@ -100,19 +100,49 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
 
     @mcp.tool(annotations=REPLACES_VALUES)
     async def crewhu_badges_update_contest(
-        metric_token: Annotated[str, Field(description="Code of the External Metric the contest uses.", min_length=1)],
+        metric_token: Annotated[
+            str | None, Field(description="Code of the External Metric the contest uses (needed to post metrics).")
+        ] = None,
         timeframe: Annotated[
-            Literal["DY", "WK", "MO", "QT", "YR"], Field(description="DY daily, WK weekly, MO monthly, QT quarterly, YR yearly.")
-        ],
-        data: Annotated[list[MetricValue], Field(description="One entry per participant.", min_length=1, max_length=1000)],
+            Literal["DY", "WK", "MO", "QT", "YR"] | None,
+            Field(description="DY daily, WK weekly, MO monthly, QT quarterly, YR yearly (needed to post metrics)."),
+        ] = None,
+        data: Annotated[
+            list[MetricValue] | None,
+            Field(description="One entry per participant (needed to post metrics).", min_length=1, max_length=1000),
+        ] = None,
+        id: Annotated[str | None, Field(description="Legacy: contest id. Not supported by the Crewhu Open API.")] = None,
+        name: Annotated[str | None, Field(description="Legacy: new contest name. Not supported by the API.")] = None,
+        description: Annotated[str | None, Field(description="Legacy: new contest description. Not supported.")] = None,
+        target: Annotated[float | None, Field(description="Legacy: new contest target. Not supported by the API.")] = None,
     ) -> str:
         """Post External Metric results to contest leaderboards; values replace the current ones.
 
-        Only when the user explicitly asks, with the exact metric, timeframe and values.
-        Needs "Contests update via API" enabled in Crewhu (Settings > Contests).
+        Send metric_token, timeframe and data. Only when the user explicitly asks, with the exact
+        metric, timeframe and values. Needs "Contests update via API" enabled in Crewhu
+        (Settings > Contests). Contest name, description and target cannot be changed through the
+        API (id, name, description and target are accepted for compatibility only).
         """
 
         async def action(client: CrewhuClient) -> dict:
+            metric_args = {"metric_token": metric_token, "timeframe": timeframe, "data": data}
+            given = [k for k, v in metric_args.items() if v not in (None, "")]
+            if not given:
+                legacy = [k for k, v in (("id", id), ("name", name), ("description", description), ("target", target))
+                          if v not in (None, "")]
+                raise ValueError(
+                    "The Crewhu Open API has no endpoint to change a contest's name, description or target"
+                    + (f" (got {', '.join(legacy)})" if legacy else "")
+                    + ". This tool can only post External Metric results to contest leaderboards: send metric_token, "
+                    "timeframe (DY, WK, MO, QT or YR) and data ([{identificator, value}])."
+                )
+            missing = [k for k in metric_args if k not in given]
+            if missing:
+                raise ValueError(
+                    f"Posting contest metrics needs metric_token, timeframe and data; missing: {', '.join(missing)}."
+                )
+            if not metric_token.strip():
+                raise ValueError("metric_token must not be blank.")
             body = {
                 "metricToken": metric_token.strip(),
                 "timeframe": timeframe,

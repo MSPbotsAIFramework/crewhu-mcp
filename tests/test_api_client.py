@@ -227,6 +227,49 @@ async def test_update_contest_posts_documented_body(monkeypatch):
     assert result["participants"] == 2 and result["updated"] is True
 
 
+async def test_update_contest_legacy_params_explain_missing_endpoint(monkeypatch):
+    rec = Recorder()
+    result = await _call(
+        monkeypatch, rec, "crewhu_badges_update_contest", {"id": "c1", "name": "Q3", "description": "x", "target": 10}
+    )
+    assert result["error"]["code"] == "invalid_argument"
+    message = result["error"]["message"]
+    assert "no endpoint to change a contest's name, description or target" in message
+    assert "metric_token" in message and "timeframe" in message and "data" in message
+    assert rec.requests == []
+
+
+async def test_update_contest_without_arguments(monkeypatch):
+    rec = Recorder()
+    result = await _call(monkeypatch, rec, "crewhu_badges_update_contest", {})
+    assert result["error"]["code"] == "invalid_argument"
+    assert rec.requests == []
+
+
+@pytest.mark.parametrize(
+    "args,missing",
+    [
+        ({"metric_token": "timemetric"}, "timeframe, data"),
+        ({"timeframe": "WK", "data": [{"identificator": "jdoe", "value": 1}]}, "metric_token"),
+        ({"id": "c1", "metric_token": "timemetric", "timeframe": "MO"}, "data"),
+    ],
+)
+async def test_update_contest_needs_all_metric_params(monkeypatch, args, missing):
+    rec = Recorder()
+    result = await _call(monkeypatch, rec, "crewhu_badges_update_contest", args)
+    assert result["error"]["code"] == "invalid_argument"
+    assert result["error"]["message"].endswith(f"missing: {missing}.")
+    assert rec.requests == []
+
+
+async def test_update_contest_ignores_legacy_params_with_metrics(monkeypatch):
+    rec = Recorder({"POST contest/metrics": {"ok": True}})
+    args = {"id": "c1", "metric_token": "timemetric", "timeframe": "DY", "data": [{"identificator": "jdoe", "value": 2}]}
+    result = await _call(monkeypatch, rec, "crewhu_badges_update_contest", args)
+    assert result["updated"] is True
+    assert json.loads(rec.calls("contest/metrics")[0].content)["metricToken"] == "timemetric"
+
+
 async def test_prizes_list_active_only_by_default(monkeypatch):
     rec = Recorder()
     await _call(monkeypatch, rec, "crewhu_prizes_list", {})

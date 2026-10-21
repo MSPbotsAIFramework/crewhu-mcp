@@ -36,8 +36,8 @@ EXPECTED_TOOLS: dict[str, set[str]] = {
     "crewhu_badges_get": {"id"},
     "crewhu_badges_history_list": set(),
     "crewhu_badges_user_recognition": {"user_id"},
-    # Shaped after the documented POST /v1/contest/metrics body.
-    "crewhu_badges_update_contest": {"metric_token", "timeframe", "data"},
+    # POST /v1/contest/metrics params plus the legacy id/name/description/target; checked at runtime.
+    "crewhu_badges_update_contest": set(),
     "crewhu_prizes_list": set(),
     "crewhu_prizes_get": {"id"},
     "crewhu_prizes_history_list": set(),

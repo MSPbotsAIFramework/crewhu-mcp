@@ -1,0 +1,316 @@
+{
+  "int_baseline": {
+    "crewhu_badges_get": {
+      "params": [
+        "id"
+      ],
+      "required": [
+        "id"
+      ]
+    },
+    "crewhu_badges_history_list": {
+      "params": [
+        "limit",
+        "step",
+        "user_id",
+        "badge_id",
+        "awarded_by",
+        "since"
+      ],
+      "required": []
+    },
+    "crewhu_badges_list": {
+      "params": [
+        "limit",
+        "step"
+      ],
+      "required": []
+    },
+    "crewhu_badges_update_contest": {
+      "params": [
+        "id",
+        "target",
+        "name",
+        "description"
+      ],
+      "required": [
+        "id"
+      ]
+    },
+    "crewhu_badges_user_recognition": {
+      "params": [
+        "user_id",
+        "limit"
+      ],
+      "required": [
+        "user_id"
+      ]
+    },
+    "crewhu_prizes_get": {
+      "params": [
+        "id"
+      ],
+      "required": [
+        "id"
+      ]
+    },
+    "crewhu_prizes_history_list": {
+      "params": [
+        "limit",
+        "step",
+        "user_id",
+        "prize_id",
+        "status",
+        "since"
+      ],
+      "required": []
+    },
+    "crewhu_prizes_list": {
+      "params": [
+        "limit",
+        "step",
+        "available_only"
+      ],
+      "required": []
+    },
+    "crewhu_prizes_pending_redemptions": {
+      "params": [
+        "limit"
+      ],
+      "required": []
+    },
+    "crewhu_prizes_user_redemptions": {
+      "params": [
+        "user_id",
+        "limit"
+      ],
+      "required": [
+        "user_id"
+      ]
+    },
+    "crewhu_surveys_detractors": {
+      "params": [
+        "limit",
+        "since"
+      ],
+      "required": []
+    },
+    "crewhu_surveys_get": {
+      "params": [
+        "id"
+      ],
+      "required": [
+        "id"
+      ]
+    },
+    "crewhu_surveys_list": {
+      "params": [
+        "limit",
+        "step",
+        "sentiment",
+        "since",
+        "include_inactive"
+      ],
+      "required": []
+    },
+    "crewhu_surveys_promoters": {
+      "params": [
+        "limit",
+        "since"
+      ],
+      "required": []
+    },
+    "crewhu_surveys_search": {
+      "params": [
+        "query",
+        "limit"
+      ],
+      "required": [
+        "query"
+      ]
+    },
+    "crewhu_users_get": {
+      "params": [
+        "id"
+      ],
+      "required": [
+        "id"
+      ]
+    },
+    "crewhu_users_list": {
+      "params": [
+        "limit",
+        "step",
+        "department",
+        "include_inactive"
+      ],
+      "required": []
+    },
+    "crewhu_users_search": {
+      "params": [
+        "query",
+        "limit"
+      ],
+      "required": [
+        "query"
+      ]
+    }
+  },
+  "upstream": {
+    "crewhu_badges_get": {
+      "params": [
+        "id"
+      ],
+      "required": [
+        "id"
+      ]
+    },
+    "crewhu_badges_history_list": {
+      "params": [
+        "limit",
+        "step",
+        "user_id",
+        "badge_id",
+        "awarded_by",
+        "since"
+      ],
+      "required": []
+    },
+    "crewhu_badges_list": {
+      "params": [
+        "limit",
+        "step"
+      ],
+      "required": []
+    },
+    "crewhu_badges_update_contest": {
+      "params": [
+        "id",
+        "target",
+        "name",
+        "description"
+      ],
+      "required": [
+        "id"
+      ]
+    },
+    "crewhu_badges_user_recognition": {
+      "params": [
+        "user_id",
+        "limit"
+      ],
+      "required": [
+        "user_id"
+      ]
+    },
+    "crewhu_prizes_get": {
+      "params": [
+        "id"
+      ],
+      "required": [
+        "id"
+      ]
+    },
+    "crewhu_prizes_history_list": {
+      "params": [
+        "limit",
+        "step",
+        "user_id",
+        "prize_id",
+        "status",
+        "since"
+      ],
+      "required": []
+    },
+    "crewhu_prizes_list": {
+      "params": [
+        "limit",
+        "step",
+        "available_only"
+      ],
+      "required": []
+    },
+    "crewhu_prizes_pending_redemptions": {
+      "params": [
+        "limit"
+      ],
+      "required": []
+    },
+    "crewhu_prizes_user_redemptions": {
+      "params": [
+        "user_id",
+        "limit"
+      ],
+      "required": [
+        "user_id"
+      ]
+    },
+    "crewhu_surveys_detractors": {
+      "params": [
+        "limit",
+        "since"
+      ],
+      "required": []
+    },
+    "crewhu_surveys_get": {
+      "params": [
+        "id"
+      ],
+      "required": [
+        "id"
+      ]
+    },
+    "crewhu_surveys_list": {
+      "params": [
+        "limit",
+        "step",
+        "sentiment",
+        "since",
+        "include_inactive"
+      ],
+      "required": []
+    },
+    "crewhu_surveys_promoters": {
+      "params": [
+        "limit",
+        "since"
+      ],
+      "required": []
+    },
+    "crewhu_surveys_search": {
+      "params": [
+        "query",
+        "limit"
+      ],
+      "required": [
+        "query"
+      ]
+    },
+    "crewhu_users_get": {
+      "params": [
+        "id"
+      ],
+      "required": [
+        "id"
+      ]
+    },
+    "crewhu_users_list": {
+      "params": [
+        "limit",
+        "step",
+        "department",
+        "include_inactive"
+      ],
+      "required": []
+    },
+    "crewhu_users_search": {
+      "params": [
+        "query",
+        "limit"
+      ],
+      "required": [
+        "query"
+      ]
+    }
+  }
+}

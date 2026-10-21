@@ -51,7 +51,7 @@ Ids are Crewhu `_id` strings; dates are ISO 8601 UTC. Survey records get a compu
 | `crewhu_badges_get` | One badge | **id** |
 | `crewhu_badges_history_list` | Badge awards (recognition feed): giver, recipients, message, points, cancellation | limit, step, user_id, badge_id, awarded_by, since |
 | `crewhu_badges_user_recognition` | Badges one user received, with the points of awards not cancelled | **user_id**, limit |
-| `crewhu_badges_update_contest` | Post External Metric results to contest leaderboards (**write**) | **metric_token**, **timeframe** (`DY`, `WK`, `MO`, `QT`, `YR`), **data** (`[{identificator, value}]`) |
+| `crewhu_badges_update_contest` | Post External Metric results to contest leaderboards (**write**) | metric_token, timeframe (`DY`, `WK`, `MO`, `QT`, `YR`), data (`[{identificator, value}]`) - all three needed at runtime; legacy id, name, description, target (accepted, not supported) |
 | `crewhu_prizes_list` | Prize catalog: description (the title), points cost, taxable flag, link | limit, step, available_only |
 | `crewhu_prizes_get` | One prize | **id** |
 | `crewhu_prizes_history_list` | Prize redemptions: prize, user, points, quantity, status, dates | limit, step, user_id, prize_id, status, since |
@@ -114,11 +114,18 @@ uv run pytest
 ## Delivery notes
 
 - **Tool count (18).** Kept as is because the tool names are an existing contract.
-- **`crewhu_badges_update_contest` parameters changed.** Older versions took `id`, `target`,
-  `name` and `description`, which match no documented Crewhu endpoint. The tool now sends the
-  documented `POST /v1/contest/metrics` body: `metric_token`, `timeframe` and `data`
+- **`crewhu_badges_update_contest` parameters.** Older versions took `id`, `target`, `name` and
+  `description`, which match no documented Crewhu endpoint. The tool sends the documented
+  `POST /v1/contest/metrics` body: `metric_token`, `timeframe` and `data`
   (`[{identificator, value}]`, where `identificator` is an employee id or email). Values
-  replace the leaderboard's current ones; it is the only write tool.
+  replace the leaderboard's current ones; it is the only write tool. For compatibility no
+  parameter is required in the schema: a call with only the old parameters returns
+  `invalid_argument` explaining that the Crewhu Open API cannot change a contest's name,
+  description or target and that metrics are sent with `metric_token` / `timeframe` / `data`;
+  a call with some but not all of those three returns `invalid_argument` naming the missing ones.
+- **Contract test.** `tests/contract_baseline.json` holds the deployed and upstream tool schemas;
+  `tests/test_contract.py` checks every tool still exists, accepts every parameter of both and
+  requires nothing the deployed version did not.
 - **Client-side filtering.** The Open API filters only by update date, active flag and record
   fields, and has no text search. Sentiment, search and "pending" status are matched here:
   detractors / promoters read up to 1,000 surveys in the window, pending redemptions up to
