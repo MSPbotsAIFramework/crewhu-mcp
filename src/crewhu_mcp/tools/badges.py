@@ -13,11 +13,13 @@
 # limitations under the License.
 """Badges, the badge award history (recognition feed) and contest leaderboard updates."""
 
+import json
 from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
+from .._json import MAX_CHARS, compact, dump_json_capped
 from ..api_client import CrewhuClient
 from ._common import (
     READ_ONLY,
@@ -34,6 +36,15 @@ from ._common import (
     updated_since,
     window_result,
 )
+
+# Room kept for the counts added after the size limit has decided which awards fit.
+_COUNTS_RESERVE = 400
+
+
+def _active_counts(awards: list) -> tuple[int, float]:
+    active = [a for a in awards if isinstance(a, dict) and not a.get("dateCancelled")]
+    points = sum(a.get("badgePoints") or 0 for a in active if isinstance(a.get("badgePoints"), (int, float)))
+    return len(active), points
 
 
 class MetricValue(BaseModel):
@@ -101,27 +112,25 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
     ) -> str:
         """Get the badges a user has received, with total points from awards that were not cancelled.
 
-        Points count only the awards returned; continue with offset=next_offset for more.
+        active_awards / active_points_in_page count only the awards in this result, so pages add
+        up; user_total_* are the whole-user totals when one call read all of the user's awards.
         """
 
-        async def action(client: CrewhuClient) -> dict:
+        async def action(client: CrewhuClient) -> str:
             wanted = user_id.strip()
             size, start = limit or 20, offset or 0
             window = await client.read_from(
                 "badgehistory", None, start, size, lambda a: isinstance(a, dict) and refers_to(a.get("toUsers"), wanted)
             )
-            active = [a for a in window.items if not a.get("dateCancelled")]
-            points = sum(a.get("badgePoints") or 0 for a in active if isinstance(a.get("badgePoints"), (int, float)))
-            return window_result(
-                "awards",
-                window,
-                start,
-                size,
-                filtered=True,
-                user_id=wanted,
-                active_awards=len(active),
-                active_points_in_page=points,
-            )
+            result = window_result("awards", window, start, size, filtered=True, user_id=wanted)
+            # Let the size limit decide which awards are returned first, then count those only:
+            # counting the whole window would count cut awards again on the next page.
+            payload = json.loads(dump_json_capped(result, MAX_CHARS - _COUNTS_RESERVE))
+            awards, points = _active_counts(payload.get("awards") or [])
+            payload["active_awards"], payload["active_points_in_page"] = awards, points
+            if start == 0 and window.complete:
+                payload["user_total_awards"], payload["user_total_points"] = _active_counts(window.items)
+            return compact(payload)
 
         return await run_tool("crewhu_badges_user_recognition", client_factory, action)
 

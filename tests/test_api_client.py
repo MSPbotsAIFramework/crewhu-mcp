@@ -421,3 +421,42 @@ async def test_survey_search_reads_newest_first_and_reports_the_range(monkeypatc
     assert result["order"] == "newest first" and result["searched_all"] is False
     assert len(rec.requests) == 1 + 20 and result["searched"] == 1984
     assert set(result["searched_range"]) == {"newest_created_at", "oldest_created_at"}
+
+
+
+# ---- PRD-21052: recognition counts match the awards returned ---------------------------------
+
+
+async def test_user_recognition_counts_only_the_awards_returned_on_a_cut_page(monkeypatch):
+    awards = [
+        {"_id": f"a{i:03d}", "toUsers": ["u1"], "badgePoints": 50 + i, "message": "well done " * 30,
+         **({"dateCancelled": "2026-05-01"} if i % 7 == 0 else {}), **{f"f{k}": k for k in range(30)}}
+        for i in range(120)
+    ]
+    rec = Recorder({"badgehistory": lambda r: httpx.Response(200, json=page(
+        awards[(int(r.url.params["step"]) - 1) * 100 : int(r.url.params["step"]) * 100],
+        total=120, step=int(r.url.params["step"]), more=r.url.params["step"] == "1"))})
+    seen, total_awards, total_points, args = [], 0, 0, {"user_id": "u1", "limit": 100}
+    while True:
+        result = await _call(monkeypatch, rec, "crewhu_badges_user_recognition", args)
+        returned = result["awards"]
+        active = [a for a in returned if not a.get("dateCancelled")]
+        assert result["active_awards"] == len(active)
+        assert result["active_points_in_page"] == sum(a["badgePoints"] for a in active)
+        seen += [a["_id"] for a in returned]
+        total_awards += result["active_awards"]
+        total_points += result["active_points_in_page"]
+        if result.get("next_offset") is None:
+            break
+        args = {"user_id": "u1", "limit": 100, "offset": result["next_offset"]}
+    assert seen == [a["_id"] for a in awards]  # no gaps, no duplicates
+    real = [a for a in awards if "dateCancelled" not in a]
+    assert (total_awards, total_points) == (len(real), sum(a["badgePoints"] for a in real))
+
+
+async def test_user_recognition_reports_whole_user_totals_when_all_were_read(monkeypatch):
+    awards = [{"toUsers": ["u1"], "badgePoints": 10}, {"toUsers": ["u1"], "badgePoints": 5, "dateCancelled": "x"},
+              {"toUsers": ["u2"], "badgePoints": 99}]
+    rec = Recorder({"badgehistory": page(awards)})
+    result = await _call(monkeypatch, rec, "crewhu_badges_user_recognition", {"user_id": "u1"})
+    assert (result["user_total_awards"], result["user_total_points"]) == (1, 10)
