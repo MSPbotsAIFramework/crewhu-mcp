@@ -151,9 +151,9 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
         """Get one survey by id, including tags, review flag and credited employee ids."""
 
         async def action(client: CrewhuClient) -> Any:
-            # A survey is updated at or after its creation, which its id encodes: scan from there.
+            # A survey is updated at or after its creation, which its id encodes: read from there.
             created = object_id_time(id)
-            survey = await client.get("survey", id, {"_updated_at": {"$gte": created}} if created else None)
+            survey = await client.get_by_update_time("survey", id, created) if created else await client.get("survey", id)
             return with_sentiment([survey])[0]
 
         return await run_tool("crewhu_surveys_get", client_factory, action)

@@ -16,7 +16,6 @@
 import asyncio
 import json
 import logging
-import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -38,7 +37,6 @@ _CALL_BUDGET_SECONDS = 100.0
 # Scans that read page after page stop starting new pages after this long, or after
 # SCAN_MAX_PAGES pages of 100, and say where to continue.
 _SCAN_BUDGET_SECONDS = 60.0
-_OBJECT_ID = re.compile(r"[0-9a-f]{24}")
 SCAN_MAX_PAGES = 20
 
 # One connection pool for the process. It never holds credentials: the token
@@ -228,11 +226,6 @@ class CrewhuClient:
         wanted = str(record_id).strip()
         if not wanted:
             raise ValueError("id must not be blank.")
-        found = await self._find_in_id_order(resource, wanted.lower()) if _OBJECT_ID.fullmatch(wanted.lower()) else None
-        if found is False:
-            raise CrewhuError(404, f"No {resource} with id {wanted}")
-        if found is not None:
-            return found
         window = await self.read_from(
             resource, query, 0, 1, lambda r: isinstance(r, dict) and str(r.get("_id")) == wanted, max_pages=50
         )
@@ -244,32 +237,36 @@ class CrewhuClient:
             404, f"No {resource} with id {wanted} in the first {window.scanned} records searched ({window.total} in total)"
         )
 
-    async def _find_in_id_order(self, resource: str, wanted: str) -> Any:
-        """The record, False if it is not in the collection, or None if the pages are not in _id order.
+    async def get_by_update_time(self, resource: str, record_id: str, created: str) -> Any:
+        """One record by _id, read from where it sits in the collection's update-time order.
 
-        An unfiltered collection comes back oldest first, in _id order (checked live on about
-        11,700 surveys), so the page holding an id is found by a binary search on page numbers:
-        a handful of requests instead of a scan of thousands of records. Every page read is
-        checked to be in order; anything unexpected falls back to the scan.
+        An unfiltered collection comes back oldest first by _updated_at (checked live on about
+        11,700 surveys), and a record is updated at or after its creation, which its id encodes.
+        The records updated since then are counted, so the scan starts about where the record
+        is instead of at the start: a record years old is found in a page or two.
         """
-        first = await self.list(resource, None, MAX_PAGE_SIZE, 1)
-        if not isinstance(first.total, int):
-            return None
-        low, high = 1, max(-(-first.total // MAX_PAGE_SIZE), 1)
-        pages = {1: first}
-        while low <= high:
-            middle = (low + high) // 2
-            page = pages.get(middle) or await self.list(resource, None, MAX_PAGE_SIZE, middle)
-            ids = [str(r.get("_id") or "").lower() for r in page.items if isinstance(r, dict)]
-            if not ids or ids != sorted(ids):
-                return None
-            if wanted < ids[0]:
-                high = middle - 1
-            elif wanted > ids[-1]:
-                low = middle + 1
-            else:
-                return next((r for r in page.items if str(r.get("_id") or "").lower() == wanted), False)
-        return False
+        wanted = str(record_id).strip()
+        everything = (await self.list(resource, None, 1, 1)).total
+        later = (await self.list(resource, {"_updated_at": {"$gte": created}}, 1, 1)).total
+        if not isinstance(everything, int) or not isinstance(later, int):
+            return await self.get(resource, wanted, {"_updated_at": {"$gte": created}})
+        # One page of slack: records updated meanwhile, or at the same moment, shift positions.
+        start = max(everything - later - MAX_PAGE_SIZE, 0)
+        # Usually found in the first page or two; a record updated long after its creation sits
+        # further on, so read on to the end of the collection (within the time budget).
+        pages = -(-(everything - start) // MAX_PAGE_SIZE) + 1
+        window = await self.read_from(
+            resource, None, start, 1, lambda r: isinstance(r, dict) and str(r.get("_id")) == wanted, max_pages=pages
+        )
+        if window.items:
+            return window.items[0]
+        if window.complete:
+            raise CrewhuError(404, f"No {resource} with id {wanted}")
+        raise CrewhuError(
+            404,
+            f"No {resource} with id {wanted} in the {window.scanned} records searched from position {start} "
+            f"(where records updated since its creation start, of {everything} in total)",
+        )
 
     async def post(self, path: str, body: Any) -> Any:
         return await self.request("POST", path, body=body)
