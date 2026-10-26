@@ -322,12 +322,62 @@ async def test_get_tools_return_the_requested_record(monkeypatch, tool, resource
     assert missing["error"]["code"] == "not_found"
 
 
-async def test_survey_get_scans_from_the_creation_time_in_its_id(monkeypatch):
-    rec = Recorder({"survey": page([{"_id": "62bf4f3cd3de20549a6ec145"}, {"_id": "62d065c27441a44c87a74c32", "rating": "5"}])})
+async def test_survey_get_falls_back_to_the_scan_from_the_creation_time_when_pages_are_out_of_order(monkeypatch):
+    # Out of _id order: the binary search gives up and the old scan (from the id's creation time) runs.
+    rows = [{"_id": "62d065c27441a44c87a74c32", "rating": "5"}, {"_id": "62bf4f3cd3de20549a6ec145"}]
+    rec = Recorder({"survey": page(rows)})
     result = await _call(monkeypatch, rec, "crewhu_surveys_get", {"id": "62d065c27441a44c87a74c32"})
     assert result["_id"] == "62d065c27441a44c87a74c32" and result["sentiment"] == "positive"
     # 0x62d065c2 = 2022-07-14T18:51:46Z, less one minute
-    assert query_of(rec.requests[0]) == {"_updated_at": {"$gte": "2022-07-14T18:50:46.000Z"}}
+    assert query_of(rec.requests[-1]) == {"_updated_at": {"$gte": "2022-07-14T18:50:46.000Z"}}
+
+
+# ---- PRD-20987 (reopened): binary search in _id order --------------------------------------------------
+
+
+def _id_ordered_api(count, holes=(), empty_page=None):
+    """Like Crewhu: an unfiltered collection, oldest first in _id order, pages of 100 by step."""
+    ids = [f"{0x6154bb8d + i * 4000:08x}579abb172c51d8f3" for i in range(count)]
+    rows = [{"_id": i, "rating": "5"} for n, i in enumerate(ids) if n not in holes]
+
+    def reply(request):
+        step, limit = int(request.url.params["step"]), int(request.url.params["limit"])
+        chunk = [] if step == empty_page else rows[(step - 1) * limit : step * limit]
+        return httpx.Response(200, json=page(chunk, total=len(rows), step=step, limit=limit, more=step * limit < len(rows)))
+
+    return ids, reply
+
+
+@pytest.mark.parametrize("position", [0, 1, 99, 100, 5999, 6000, 11729])
+async def test_survey_get_finds_any_survey_with_a_few_requests(monkeypatch, position):
+    ids, reply = _id_ordered_api(11730)
+    rec = Recorder({"survey": reply})
+    result = await _call(monkeypatch, rec, "crewhu_surveys_get", {"id": ids[position]})
+    assert result["_id"] == ids[position]
+    assert len(rec.requests) <= 9 and all(query_of(r) is None for r in rec.requests)
+
+
+@pytest.mark.parametrize("wanted", ["missing-inside", "000000000000000000000000", "ffffffffffffffffffffffff"])
+async def test_survey_get_missing_id_is_not_found_without_a_scan(monkeypatch, wanted):
+    ids, reply = _id_ordered_api(11730, holes={4321})
+    rec = Recorder({"survey": reply})
+    sid = ids[4321] if wanted == "missing-inside" else wanted
+    result = await _call(monkeypatch, rec, "crewhu_surveys_get", {"id": sid})
+    assert result["error"]["code"] == "not_found" and "records searched" not in result["error"]["message"]
+    assert len(rec.requests) <= 9
+
+
+async def test_survey_get_with_an_empty_page_falls_back_to_the_scan(monkeypatch):
+    ids, reply = _id_ordered_api(300, empty_page=2)
+    rec = Recorder({"survey": reply})
+    result = await _call(monkeypatch, rec, "crewhu_surveys_get", {"id": ids[10]})
+    assert result["_id"] == ids[10] and query_of(rec.requests[-1]) is not None
+
+
+async def test_get_with_an_upper_case_id_is_found(monkeypatch):
+    ids, reply = _id_ordered_api(250)
+    rec = Recorder({"survey": reply})
+    assert (await _call(monkeypatch, rec, "crewhu_surveys_get", {"id": ids[200].upper()}))["_id"] == ids[200]
 
 
 # ---- PRD-20988: equality filters are matched locally -----------------------------------------
